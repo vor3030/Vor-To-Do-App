@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rov and Douphne To Do List</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="header">
+        <h1 id="header1">DouphRo To Do App</h1>
+        <div class="container">
+            <h1>Task Manager</h1>
+            
+            <div class="dashboard">
+                <div class="stat-card">
+                    <h3>Total</h3>
+                    <p id="totalTasks">0</p>
+                </div>
+                <div class="stat-card">
+                    <h3>Done</h3>
+                    <p id="completedTasks">0</p>
+                </div>
+                <div class="stat-card">
+                    <h3>Pending</h3>
+                    <p id="pendingTasks">0</p>
+                </div>
+            </div>
+
+            <div class="input-container">
+                <input type="text" id="taskInput" placeholder="What needs to be done?">
+                <input type="date" id="taskDate">
+                <input type="time" id="taskTime">
+                <button onclick="addTask()">Add Task</button>
+            </div>
+            <ul id="taskList"></ul>
+        </div>
+    </div>
+
+    <footer class="site-footer">
+        <p>&copy; 2026 Task Manager App. All rights reserved.</p>
+        <p>Designed and developed by <span class="dev-name">vor</span></p>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>
