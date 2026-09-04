@@ -10,6 +10,9 @@
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+    <div id="configBanner" class="config-banner hidden">
+        ⚠️ Cloud accounts aren't configured yet — add your Supabase keys to <strong>config.js</strong> (see README.md). Guest mode still works.
+    </div>
 
     <!-- ==================== AUTH VIEW ==================== -->
     <div id="authView" class="auth-view">
@@ -27,8 +30,8 @@
 
             <!-- Login Form -->
             <form id="loginForm" class="auth-form" novalidate>
-                <label class="field">Username or Email
-                    <input type="text" id="loginIdentifier" autocomplete="username" placeholder="e.g. vor" required>
+                <label class="field">Email
+                    <input type="email" id="loginEmail" autocomplete="email" placeholder="you@example.com" required>
                 </label>
                 <label class="field">Password
                     <span class="pw-wrap">
@@ -36,11 +39,10 @@
                         <button type="button" class="pw-toggle" data-target="loginPassword" title="Show/Hide password">👁</button>
                     </span>
                 </label>
-                <label class="remember-row">
-                    <input type="checkbox" id="rememberMe" checked> Remember me on this device
-                </label>
                 <p class="auth-error hidden" id="loginError"></p>
+                <p class="auth-info hidden" id="loginInfo"></p>
                 <button type="submit" class="btn-primary btn-block">Log In</button>
+                <button type="button" id="forgotBtn" class="auth-link">Forgot password?</button>
                 <button type="button" id="guestBtn" class="btn-ghost btn-block">Continue as Guest</button>
                 <p class="auth-hint">Guest mode keeps your tasks on this device only.</p>
             </form>
@@ -49,9 +51,6 @@
             <form id="registerForm" class="auth-form hidden" novalidate>
                 <label class="field">Full Name
                     <input type="text" id="regName" autocomplete="name" placeholder="Douphne Vor" required>
-                </label>
-                <label class="field">Username
-                    <input type="text" id="regUsername" autocomplete="username" placeholder="3+ characters, letters/numbers" required>
                 </label>
                 <label class="field">Email
                     <input type="email" id="regEmail" autocomplete="email" placeholder="you@example.com" required>
@@ -70,8 +69,9 @@
                     <input type="password" id="regConfirm" autocomplete="new-password" placeholder="Repeat your password" required>
                 </label>
                 <p class="auth-error hidden" id="registerError"></p>
+                <p class="auth-info hidden" id="registerInfo"></p>
                 <button type="submit" class="btn-primary btn-block">Create Account</button>
-                <p class="auth-hint">Your account is stored locally in this browser (demo app).</p>
+                <p class="auth-hint">A real account — your tasks sync to the cloud and work on every device.</p>
             </form>
         </div>
     </div>
@@ -177,9 +177,10 @@
         </div>
     </div>
 
-    <!-- Toast with Undo -->
+    <!-- Toast with Undo / Actions -->
     <div id="toast" class="toast">
         <span id="toastMsg"></span>
+        <button id="toastAction" class="toast-undo hidden"></button>
         <button id="toastUndo" class="toast-undo hidden">Undo</button>
     </div>
 
@@ -188,6 +189,8 @@
         <p>Designed and developed by <span class="dev-name">vor</span></p>
     </footer>
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="config.js"></script>
     <script src="script.js"></script>
 </body>
 </html>

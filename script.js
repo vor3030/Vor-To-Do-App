@@ -1,10 +1,9 @@
 /* =====================================================================
    Vor-To-Do App — script.js
-   Features: register/login (client-side, demo-grade), guest mode,
-   per-user tasks, priorities, categories, search/filter/sort,
-   inline editing, drag & drop, undo delete, dark mode, JSON export.
-   NOTE: Passwords are hashed client-side and stored in localStorage.
-   This is a demo app — never use this pattern in production.
+   Real accounts & cloud sync via Supabase (Auth + Postgres with RLS).
+   Falls back to local-only "Guest" mode when Supabase isn't configured
+   or the user isn't signed in.
+   Setup: see README.md and config.js.
    ===================================================================== */
 
 'use strict';
@@ -32,68 +31,63 @@ const QUOTES = [
     'Start where you are. Use what you have. ⭐'
 ];
 
-/** Hash a password. Prefers SHA-256 (secure contexts); falls back to FNV. */
-async function hashPassword(password) {
-    const salted = 'vtd::' + password;
-    if (window.crypto && crypto.subtle && crypto.subtle.digest) {
+// ---------------- Supabase ----------------
+let sb = null;           // Supabase client (null = not configured)
+let cloudMode = false;   // true once a Supabase user is signed in
+
+function initSupabase() {
+    const cfg = window.SUPABASE_CONFIG || {};
+    const ready = cfg.url && cfg.anonKey &&
+        !String(cfg.url).includes('YOUR_') && !String(cfg.anonKey).includes('YOUR_');
+    if (ready && window.supabase && window.supabase.createClient) {
+        sb = window.supabase.createClient(cfg.url, cfg.anonKey);
+    }
+    if (!sb) $('configBanner').classList.remove('hidden');
+}
+
+// ---------------- Local storage (Guest mode + settings) ----------------
+const LOCAL_TASKS_KEY = 'vtdLocalTasks';      // guest-mode tasks
+const LEGACY_TASKS_KEY = 'rovDouphneTasks';   // tasks from the very first app version
+const LEGACY_USERS_KEY = 'vtdUsers';          // old demo accounts — cleaned up on load
+
+function loadLocalTasks() {
+    // One-time migration from the old single-user version
+    if (localStorage.getItem(LOCAL_TASKS_KEY) === null) {
         try {
-            const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(salted));
-            return 'sha256:' + Array.from(new Uint8Array(buf))
-                .map(b => b.toString(16).padStart(2, '0')).join('');
-        } catch (e) { /* fall through to FNV */ }
+            const legacy = JSON.parse(localStorage.getItem(LEGACY_TASKS_KEY)) || [];
+            if (legacy.length > 0) localStorage.setItem(LOCAL_TASKS_KEY, JSON.stringify(legacy));
+        } catch { /* ignore corrupt legacy data */ }
     }
-    return 'fnv:' + fnvHash(salted);
+    try { return JSON.parse(localStorage.getItem(LOCAL_TASKS_KEY)) || []; }
+    catch { return []; }
 }
 
-function fnvHash(str) {
-    let h1 = 0x811c9dc5, h2 = 0x01000193;
-    for (let i = 0; i < str.length; i++) {
-        h1 = Math.imul(h1 ^ str.charCodeAt(i), 16777619) >>> 0;
-        h2 = Math.imul(h2 ^ str.charCodeAt(i), 2654435761) >>> 0;
-    }
-    return (h1.toString(16) + h2.toString(16)).padStart(16, '0');
+function saveLocalTasks() {
+    localStorage.setItem(LOCAL_TASKS_KEY, JSON.stringify(tasks));
 }
 
-// ---------------- Storage keys ----------------
-const USERS_KEY = 'vtdUsers';
-const SESSION_KEY = 'vtdSession';        // "remember me" (localStorage)
-const SESSION_TMP_KEY = 'vtdSessionTmp'; // this-tab-only session (sessionStorage)
-const LEGACY_TASKS_KEY = 'rovDouphneTasks';
+// ---------------- App state ----------------
+let tasks = [];
+let settings = { theme: 'light', filter: 'all', category: 'all', sort: 'default' };
+let dragId = null;
 
-function getUsers() {
-    try { return JSON.parse(localStorage.getItem(USERS_KEY)) || {}; }
-    catch { return {}; }
+function settingsKey() {
+    return `vtdSettings_${currentUser ? currentUser.uid : 'anon'}`;
 }
 
-function saveUsers(users) {
-    localStorage.setItem(USERS_KEY, JSON.stringify(users));
-}
-
-function setSession(username, remember) {
-    const payload = JSON.stringify({ username });
-    if (remember) {
-        localStorage.setItem(SESSION_KEY, payload);
-        sessionStorage.removeItem(SESSION_TMP_KEY);
-    } else {
-        sessionStorage.setItem(SESSION_TMP_KEY, payload);
-        localStorage.removeItem(SESSION_KEY);
-    }
-}
-
-function getSession() {
+function loadSettings() {
+    settings = { theme: 'light', filter: 'all', category: 'all', sort: 'default' };
     try {
-        const raw = sessionStorage.getItem(SESSION_TMP_KEY) || localStorage.getItem(SESSION_KEY);
-        return raw ? JSON.parse(raw) : null;
-    } catch { return null; }
+        settings = Object.assign(settings, JSON.parse(localStorage.getItem(settingsKey())) || {});
+    } catch { /* defaults */ }
 }
 
-function clearSession() {
-    localStorage.removeItem(SESSION_KEY);
-    sessionStorage.removeItem(SESSION_TMP_KEY);
+function saveSettings() {
+    if (currentUser) localStorage.setItem(settingsKey(), JSON.stringify(settings));
 }
 
 // ---------------- Auth UI ----------------
-let currentUser = null;
+let currentUser = null; // { name, uid, email, guest }
 
 function showAuthError(id, message) {
     const el = $(id);
@@ -101,12 +95,19 @@ function showAuthError(id, message) {
     el.classList.remove('hidden');
 }
 
-function hideAuthErrors() {
-    ['loginError', 'registerError'].forEach(id => $(id).classList.add('hidden'));
+function showAuthInfo(id, message) {
+    const el = $(id);
+    el.textContent = message;
+    el.classList.remove('hidden');
+}
+
+function hideAuthMessages() {
+    ['loginError', 'loginInfo', 'registerError', 'registerInfo']
+        .forEach(id => $(id).classList.add('hidden'));
 }
 
 function switchAuthTab(tab) {
-    hideAuthErrors();
+    hideAuthMessages();
     const isLogin = tab === 'login';
     $('tabLogin').classList.toggle('active', isLogin);
     $('tabRegister').classList.toggle('active', !isLogin);
@@ -141,114 +142,230 @@ function updateStrengthMeter() {
 }
 
 // ---------------- Auth actions ----------------
+const NOT_CONFIGURED_MSG = 'Cloud accounts aren\'t configured yet — add your Supabase keys to config.js (see README.md), or continue as Guest.';
+
 async function register(event) {
     event.preventDefault();
-    hideAuthErrors();
+    hideAuthMessages();
 
     const name = $('regName').value.trim();
-    const username = $('regUsername').value.trim().toLowerCase();
-    const email = $('regEmail').value.trim().toLowerCase();
+    const email = $('regEmail').value.trim();
     const password = $('regPassword').value;
     const confirm = $('regConfirm').value;
-    const users = getUsers();
 
     if (name.length < 2) return showAuthError('registerError', 'Please enter your full name.');
-    if (!/^[a-z0-9_]{3,20}$/.test(username)) {
-        return showAuthError('registerError', 'Username must be 3–20 characters: letters, numbers or underscore.');
-    }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
         return showAuthError('registerError', 'Please enter a valid email address.');
     }
     if (password.length < 6) return showAuthError('registerError', 'Password must be at least 6 characters.');
     if (password !== confirm) return showAuthError('registerError', 'Passwords do not match.');
-    if (users[username]) return showAuthError('registerError', 'That username is already taken.');
-    if (Object.values(users).some(u => u.email === email)) {
-        return showAuthError('registerError', 'That email is already registered.');
-    }
+    if (!sb) return showAuthError('registerError', NOT_CONFIGURED_MSG);
 
-    const hash = await hashPassword(password);
-    users[username] = { name, username, email, hash, createdAt: new Date().toISOString() };
-    saveUsers(users);
+    const { data, error } = await sb.auth.signUp({
+        email,
+        password,
+        options: {
+            data: { full_name: name },
+            emailRedirectTo: location.origin + location.pathname
+        }
+    });
+
+    if (error) return showAuthError('registerError', error.message);
 
     $('registerForm').reset();
     updateStrengthMeter();
-    setSession(username, true);
-    startApp(users[username]);
+
+    if (data.session && data.user) {
+        // Email confirmation is disabled → signed in immediately
+        // (the auth-state listener will start the app)
+    } else {
+        switchAuthTab('login');
+        $('loginEmail').value = email;
+        showAuthInfo('loginInfo', 'Account created! 📧 Check your email inbox and confirm your address, then log in here.');
+    }
 }
 
 async function login(event) {
     event.preventDefault();
-    hideAuthErrors();
+    hideAuthMessages();
 
-    const identifier = $('loginIdentifier').value.trim().toLowerCase();
+    const email = $('loginEmail').value.trim();
     const password = $('loginPassword').value;
-    const users = getUsers();
+    if (!email || !password) return showAuthError('loginError', 'Please enter your email and password.');
+    if (!sb) return showAuthError('loginError', NOT_CONFIGURED_MSG);
 
-    const user = Object.values(users).find(
-        u => u.username === identifier || u.email === identifier
-    );
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) return showAuthError('loginError', error.message);
 
-    if (!user) return showAuthError('loginError', 'No account found with that username or email.');
-
-    const hash = await hashPassword(password);
-    if (hash !== user.hash) return showAuthError('loginError', 'Incorrect password. Please try again.');
-
+    // Success → the auth-state listener starts the app
     $('loginForm').reset();
-    setSession(user.username, $('rememberMe').checked);
-    startApp(user);
+}
+
+async function forgotPassword() {
+    hideAuthMessages();
+    if (!sb) return showAuthError('loginError', NOT_CONFIGURED_MSG);
+
+    const email = $('loginEmail').value.trim();
+    if (!email) return showAuthError('loginError', 'Type your email above first, then click "Forgot password?".');
+
+    const { error } = await sb.auth.resetPasswordForEmail(email, {
+        redirectTo: location.origin + location.pathname
+    });
+    if (error) return showAuthError('loginError', error.message);
+
+    showAuthInfo('loginInfo', `Password reset email sent to ${email}. 📬`);
 }
 
 function loginAsGuest() {
-    hideAuthErrors();
-
-    // One-time migration: adopt tasks from the old single-user version.
-    if (loadUserTasks('__guest').length === 0) {
-        try {
-            const legacy = JSON.parse(localStorage.getItem(LEGACY_TASKS_KEY)) || [];
-            if (legacy.length > 0) saveUserTasks('__guest', legacy);
-        } catch { /* ignore corrupt legacy data */ }
-    }
-
-    const guest = { name: 'Guest', username: '__guest', isGuest: true };
-    setSession('__guest', true);
-    startApp(guest);
+    hideAuthMessages();
+    cloudMode = false;
+    currentUser = { name: 'Guest', uid: '__guest', email: null, guest: true };
+    startApp();
 }
 
-function logout() {
-    clearSession();
+async function logout() {
+    if (sb && cloudMode) {
+        await sb.auth.signOut(); // the auth-state listener shows the auth view
+    } else {
+        showAuth();
+    }
+}
+
+function showAuth() {
     currentUser = null;
+    cloudMode = false;
     $('appView').classList.add('hidden');
     $('authView').classList.remove('hidden');
     $('loginPassword').value = '';
     switchAuthTab('login');
-    $('loginIdentifier').focus();
+    $('loginEmail').focus();
 }
 
-// ---------------- Task data (per user) ----------------
-const tasksKey = (username) => `vtdTasks_${username}`;
-const settingsKey = (username) => `vtdSettings_${username}`;
+// ---------------- Session handling ----------------
+async function handleSignedIn(user) {
+    if (cloudMode && currentUser && currentUser.uid === user.id) return; // already running
 
-let tasks = [];
-let settings = { theme: 'light', filter: 'all', category: 'all', sort: 'default' };
-let dragId = null;
-let lastDeleted = null; // { task, index } for undo
+    cloudMode = true;
+    const meta = user.user_metadata || {};
+    currentUser = {
+        name: meta.full_name || (user.email || 'user').split('@')[0],
+        uid: user.id,
+        email: user.email,
+        guest: false
+    };
 
-function loadUserTasks(username) {
-    try { return JSON.parse(localStorage.getItem(tasksKey(username))) || []; }
-    catch { return []; }
+    try {
+        await offerLocalTaskUpload();
+        tasks = await loadCloudTasks();
+    } catch (e) {
+        tasks = [];
+        showToast('Could not load tasks: ' + e.message);
+    }
+    startApp();
 }
 
-function saveUserTasks(username, userTasks) {
-    localStorage.setItem(tasksKey(username), JSON.stringify(userTasks));
+/**
+ * First sign-in nicety: if the cloud account has no tasks yet but this
+ * device has saved (guest/legacy) tasks, offer a one-click upload.
+ */
+async function offerLocalTaskUpload() {
+    const localTasks = loadLocalTasks();
+    if (localTasks.length === 0) return;
+
+    const { data } = await sb.from('tasks').select('id').limit(1);
+    if (data && data.length > 0) return; // account already has tasks
+
+    showToast(`Found ${localTasks.length} task(s) saved on this device`, {
+        duration: 10000,
+        actionLabel: 'Upload',
+        onAction: async () => {
+            const rows = localTasks.map((t, i) => ({
+                text: t.text,
+                due_date: t.date || null,
+                due_time: t.time || null,
+                priority: t.priority || 'medium',
+                category: t.category || 'personal',
+                completed: !!t.completed,
+                completed_at: t.completedAt || null,
+                sort_order: i
+            }));
+            const { error } = await sb.from('tasks').insert(rows);
+            if (error) return showToast('Upload failed: ' + error.message);
+            localStorage.removeItem(LOCAL_TASKS_KEY);
+            tasks = await loadCloudTasks();
+            renderTasks();
+            showToast('Tasks uploaded to your account ☁️');
+        }
+    });
 }
 
-function saveTasks() {
-    if (currentUser) saveUserTasks(currentUser.username, tasks);
+// ---------------- Cloud data layer ----------------
+const FIELD_MAP = {
+    text: 'text',
+    date: 'due_date',
+    time: 'due_time',
+    priority: 'priority',
+    category: 'category',
+    completed: 'completed',
+    completedAt: 'completed_at'
+};
+
+function rowToTask(r) {
+    return {
+        id: r.id,
+        text: r.text,
+        date: r.due_date || '',
+        time: (r.due_time || '').slice(0, 5),
+        priority: r.priority || 'medium',
+        category: r.category || 'personal',
+        completed: !!r.completed,
+        completedAt: r.completed_at || null,
+        createdAt: r.created_at
+    };
 }
 
-function saveSettings() {
-    if (currentUser && !currentUser.isGuest) {
-        localStorage.setItem(settingsKey(currentUser.username), JSON.stringify(settings));
+async function loadCloudTasks() {
+    const { data, error } = await sb.from('tasks')
+        .select('*')
+        .eq('user_id', currentUser.uid)
+        .order('sort_order', { ascending: true })
+        .order('created_at', { ascending: true });
+    if (error) throw error;
+    return (data || []).map(rowToTask);
+}
+
+async function cloudInsert(task, sortOrder) {
+    const { data, error } = await sb.from('tasks').insert({
+        user_id: currentUser.uid,
+        text: task.text,
+        due_date: task.date || null,
+        due_time: task.time || null,
+        priority: task.priority || 'medium',
+        category: task.category || 'personal',
+        completed: !!task.completed,
+        completed_at: task.completedAt || null,
+        sort_order: sortOrder
+    }).select('id').single();
+    if (error) { showToast('Sync failed: ' + error.message); return null; }
+    return data.id;
+}
+
+async function cloudUpdate(taskId, changes) {
+    const patch = {};
+    for (const [key, value] of Object.entries(changes)) {
+        const col = FIELD_MAP[key];
+        if (!col) continue;
+        patch[col] = (key === 'date' || key === 'time') ? (value || null) : value;
+    }
+    const { error } = await sb.from('tasks').update(patch).eq('id', taskId);
+    if (error) showToast('Sync failed: ' + error.message);
+}
+
+function persistOrder() {
+    if (cloudMode) {
+        tasks.forEach((t, i) => sb.from('tasks').update({ sort_order: i }).eq('id', t.id));
+    } else {
+        saveLocalTasks();
     }
 }
 
@@ -288,37 +405,29 @@ function formatTime(timeVal) {
     return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${ampm}`;
 }
 
-// ---------------- App start / stop ----------------
-function startApp(user) {
-    currentUser = user;
+// ---------------- App start ----------------
+function startApp() {
     $('authView').classList.add('hidden');
     $('appView').classList.remove('hidden');
 
-    // Per-user settings (start from defaults, then load saved ones)
-    settings = { theme: 'light', filter: 'all', category: 'all', sort: 'default' };
-    if (!user.isGuest) {
-        try {
-            settings = Object.assign(settings, JSON.parse(localStorage.getItem(settingsKey(user.username))) || {});
-        } catch { /* defaults */ }
-    }
-
+    loadSettings();
     applyTheme(settings.theme);
     $('themeToggle').textContent = settings.theme === 'dark' ? '☀️' : '🌙';
 
-    tasks = loadUserTasks(user.username);
+    if (!cloudMode) tasks = loadLocalTasks();
 
     // Greeting + avatar
     const hour = new Date().getHours();
     const part = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
-    $('greeting').textContent = `${part}, ${user.name}!`;
-    $('userName').textContent = user.isGuest ? 'Guest' : user.name;
-    $('userAvatar').textContent = user.name.trim().charAt(0).toUpperCase() || 'V';
+    $('greeting').textContent = `${part}, ${currentUser.name}!`;
+    $('userName').textContent = currentUser.guest ? 'Guest' : currentUser.name;
+    $('userAvatar').textContent = currentUser.name.trim().charAt(0).toUpperCase() || 'V';
 
     // Motivational quote (rotates daily)
     const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
     $('motivation').textContent = QUOTES[dayOfYear % QUOTES.length];
 
-    // Restore toolbar state from settings
+    // Restore toolbar state
     $('sortSelect').value = settings.sort;
     $('categoryFilter').value = settings.category;
     document.querySelectorAll('.filter-tab').forEach(btn =>
@@ -333,6 +442,12 @@ function applyTheme(theme) {
     else delete document.body.dataset.theme;
 }
 
+function toggleTheme() {
+    settings.theme = settings.theme === 'dark' ? 'light' : 'dark';
+    applyTheme(settings.theme);
+    $('themeToggle').textContent = settings.theme === 'dark' ? '☀️' : '🌙';
+    saveSettings();
+}
 
 // ---------------- Rendering ----------------
 function getVisibleTasks() {
@@ -402,13 +517,13 @@ function renderTask(task) {
     completeBtn.innerHTML = '✓';
     completeBtn.className = 'complete-btn' + (task.completed ? ' active' : '');
     completeBtn.setAttribute('aria-label', 'Mark task complete');
-    completeBtn.onclick = () => {
+    completeBtn.onclick = async () => {
         task.completed = !task.completed;
-        if (task.completed) {
-            task.completedAt = new Date().toISOString();
-            showToast('Task completed! 🎉');
-        }
-        saveTasks();
+        if (task.completed) task.completedAt = new Date().toISOString();
+        else task.completedAt = null;
+        if (cloudMode) await cloudUpdate(task.id, { completed: task.completed, completedAt: task.completedAt });
+        else saveLocalTasks();
+        if (task.completed) showToast('Task completed! 🎉');
         renderTasks();
     };
 
@@ -459,7 +574,7 @@ function renderTask(task) {
         const [moved] = tasks.splice(from, 1);
         tasks.splice(to, 0, moved);
         dragId = null;
-        saveTasks();
+        persistOrder();
         renderTasks();
     });
 
@@ -485,72 +600,100 @@ function renderTasks() {
             ? `No tasks match "${q}".`
             : 'Nothing matches the current filters.';
     }
+    emptyState.classList.toggle('hidden', visible.length > 0);
+
     updateDashboard();
 }
 
-// ---------------- Theme toggle ----------------
-function toggleTheme() {
-    settings.theme = settings.theme === 'dark' ? 'light' : 'dark';
-    applyTheme(settings.theme);
-    $('themeToggle').textContent = settings.theme === 'dark' ? '☀️' : '🌙';
-    saveSettings();
-}
-
 // ---------------- Task CRUD ----------------
-function addTask() {
+async function addTask() {
     const taskInput = $('taskInput');
     const text = taskInput.value.trim();
     if (!text) { taskInput.focus(); return; }
 
-    tasks.push({
-        id: Date.now() + Math.random().toString(16).slice(2, 6),
+    const task = {
         text,
         date: $('taskDate').value,
         time: $('taskTime').value,
         priority: $('taskPriority').value,
         category: $('taskCategory').value,
         completed: false,
+        completedAt: null,
         createdAt: new Date().toISOString()
-    });
+    };
 
-    saveTasks();
+    if (cloudMode) {
+        const id = await cloudInsert(task, tasks.length);
+        if (!id) return; // sync failed — don't add a ghost row
+        task.id = id;
+        tasks.push(task);
+    } else {
+        task.id = Date.now() + Math.random().toString(16).slice(2, 6);
+        tasks.push(task);
+        saveLocalTasks();
+    }
     renderTasks();
     taskInput.value = '';
     taskInput.focus();
 }
 
-function deleteTask(id) {
+async function deleteTask(id) {
     const index = tasks.findIndex(t => t.id === id);
     if (index === -1) return;
 
-    lastDeleted = { task: tasks[index], index };
+    const removed = tasks[index];
     tasks.splice(index, 1);
-    saveTasks();
+
+    if (cloudMode) {
+        const { error } = await sb.from('tasks').delete().eq('id', id);
+        if (error) showToast('Sync failed: ' + error.message);
+    } else {
+        saveLocalTasks();
+    }
+
     renderTasks();
     showToast('Task deleted', {
-        undo: () => {
-            if (!lastDeleted) return;
-            tasks.splice(Math.min(lastDeleted.index, tasks.length), 0, lastDeleted.task);
-            lastDeleted = null;
-            saveTasks();
-            renderTasks();
-        }
+        undo: () => restoreTask(removed, index)
     });
 }
 
-function clearCompleted() {
-    const count = tasks.filter(t => t.completed).length;
-    if (count === 0) { showToast('No completed tasks to clear'); return; }
+async function restoreTask(task, index) {
+    if (cloudMode) {
+        const id = await cloudInsert(task, index);
+        if (id) task.id = id;
+    } else {
+        saveLocalTasks();
+    }
+    tasks.splice(Math.min(index, tasks.length), 0, task);
+    persistOrder();
+    renderTasks();
+}
 
+async function clearCompleted() {
     const removed = tasks.filter(t => t.completed);
+    if (removed.length === 0) { showToast('No completed tasks to clear'); return; }
+
     const firstIndex = tasks.findIndex(t => t.completed);
     tasks = tasks.filter(t => !t.completed);
-    saveTasks();
+
+    if (cloudMode) {
+        const { error } = await sb.from('tasks').delete().in('id', removed.map(t => t.id));
+        if (error) showToast('Sync failed: ' + error.message);
+    } else {
+        saveLocalTasks();
+    }
+
     renderTasks();
-    showToast(`${count} completed task${count > 1 ? 's' : ''} cleared`, {
-        undo: () => {
-            tasks.splice(firstIndex, 0, ...removed);
-            saveTasks();
+    showToast(`${removed.length} completed task${removed.length > 1 ? 's' : ''} cleared`, {
+        undo: async () => {
+            for (const t of removed) {
+                if (cloudMode) {
+                    const id = await cloudInsert(t, tasks.length);
+                    if (id) t.id = id;
+                }
+                tasks.push(t);
+            }
+            persistOrder();
             renderTasks();
         }
     });
@@ -569,11 +712,12 @@ function startEdit(task, textSpan) {
     const finish = (save) => {
         if (finished) return;
         finished = true;
-        if (save) {
-            const v = input.value.trim();
-            if (v) task.text = v;
+        const value = input.value.trim();
+        if (save && value && value !== task.text) {
+            task.text = value;
+            if (cloudMode) cloudUpdate(task.id, { text: value });
+            else saveLocalTasks();
         }
-        saveTasks();
         renderTasks();
     };
 
@@ -608,12 +752,23 @@ let toastTimer = null;
 function showToast(message, opts = {}) {
     $('toastMsg').textContent = message;
     const undoBtn = $('toastUndo');
+    const actionBtn = $('toastAction');
+
     if (opts.undo) {
         undoBtn.classList.remove('hidden');
         undoBtn.onclick = () => { hideToast(); opts.undo(); };
     } else {
         undoBtn.classList.add('hidden');
     }
+
+    if (opts.actionLabel && opts.onAction) {
+        actionBtn.textContent = opts.actionLabel;
+        actionBtn.classList.remove('hidden');
+        actionBtn.onclick = () => { hideToast(); opts.onAction(); };
+    } else {
+        actionBtn.classList.add('hidden');
+    }
+
     $('toast').classList.add('show');
     clearTimeout(toastTimer);
     toastTimer = setTimeout(hideToast, opts.duration || 5000);
@@ -628,7 +783,7 @@ function exportTasks() {
     if (tasks.length === 0) { showToast('No tasks to export yet'); return; }
     const data = {
         app: 'Vor-To-Do',
-        user: currentUser ? currentUser.name : 'unknown',
+        user: currentUser ? (currentUser.email || currentUser.name) : 'unknown',
         exportedAt: new Date().toISOString(),
         tasks
     };
@@ -636,7 +791,7 @@ function exportTasks() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `vortodo-${currentUser.username}-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `vortodo-tasks-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
     showToast('Tasks exported as JSON 📄');
@@ -650,6 +805,7 @@ function bindEvents() {
     $('loginForm').addEventListener('submit', login);
     $('registerForm').addEventListener('submit', register);
     $('guestBtn').addEventListener('click', loginAsGuest);
+    $('forgotBtn').addEventListener('click', forgotPassword);
     $('regPassword').addEventListener('input', updateStrengthMeter);
     document.querySelectorAll('.pw-toggle').forEach(btn =>
         btn.addEventListener('click', () => togglePasswordVisibility(btn)));
@@ -694,15 +850,31 @@ function bindEvents() {
 }
 
 // ---------------- Init ----------------
-(function init() {
+(async function init() {
+    // Clean up storage from the old demo version
+    localStorage.removeItem(LEGACY_USERS_KEY);
+
+    initSupabase();
     bindEvents();
-    const session = getSession();
-    if (!session) return;
-    if (session.username === '__guest') {
-        startApp({ name: 'Guest', username: '__guest', isGuest: true });
-    } else {
-        const user = getUsers()[session.username];
-        if (user) startApp(user);
-        else clearSession();
+
+    if (!sb) return; // Guest-only mode until Supabase is configured
+
+    try {
+        // Restore an existing session (stays signed in across visits)
+        const { data } = await sb.auth.getSession();
+        if (data && data.session && data.session.user) {
+            await handleSignedIn(data.session.user);
+        }
+    } catch (e) {
+        console.error('Session restore failed:', e);
     }
+
+    // React to sign-in / sign-out in any tab or after email confirmation
+    sb.auth.onAuthStateChange((event, session) => {
+        if (session && session.user) {
+            handleSignedIn(session.user);
+        } else if (event === 'SIGNED_OUT') {
+            showAuth();
+        }
+    });
 })();
