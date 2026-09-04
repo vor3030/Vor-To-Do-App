@@ -3,42 +3,188 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rov and Douphne To Do List</title>
+    <title>Vor-To-Do — Smart Task Manager</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div class="header">
-        <h1 id="header1">DouphRo To Do App</h1>
-        <div class="container">
-            <h1>Task Manager</h1>
-            
-            <div class="dashboard">
-                <div class="stat-card">
-                    <h3>Total</h3>
-                    <p id="totalTasks">0</p>
-                </div>
-                <div class="stat-card">
-                    <h3>Done</h3>
-                    <p id="completedTasks">0</p>
-                </div>
-                <div class="stat-card">
-                    <h3>Pending</h3>
-                    <p id="pendingTasks">0</p>
-                </div>
+
+    <!-- ==================== AUTH VIEW ==================== -->
+    <div id="authView" class="auth-view">
+        <div class="auth-card">
+            <div class="auth-brand">
+                <span class="brand-mark">✔</span>
+                <h1>Vor-To-Do</h1>
+                <p class="auth-tagline">Organize your day, your way.</p>
             </div>
 
-            <div class="input-container">
-                <input type="text" id="taskInput" placeholder="What needs to be done?">
-                <input type="date" id="taskDate">
-                <input type="time" id="taskTime">
-                <button onclick="addTask()">Add Task</button>
+            <div class="auth-tabs" role="tablist">
+                <button type="button" id="tabLogin" class="auth-tab active">Log In</button>
+                <button type="button" id="tabRegister" class="auth-tab">Register</button>
             </div>
-            <ul id="taskList"></ul>
+
+            <!-- Login Form -->
+            <form id="loginForm" class="auth-form" novalidate>
+                <label class="field">Username or Email
+                    <input type="text" id="loginIdentifier" autocomplete="username" placeholder="e.g. vor" required>
+                </label>
+                <label class="field">Password
+                    <span class="pw-wrap">
+                        <input type="password" id="loginPassword" autocomplete="current-password" placeholder="Your password" required>
+                        <button type="button" class="pw-toggle" data-target="loginPassword" title="Show/Hide password">👁</button>
+                    </span>
+                </label>
+                <label class="remember-row">
+                    <input type="checkbox" id="rememberMe" checked> Remember me on this device
+                </label>
+                <p class="auth-error hidden" id="loginError"></p>
+                <button type="submit" class="btn-primary btn-block">Log In</button>
+                <button type="button" id="guestBtn" class="btn-ghost btn-block">Continue as Guest</button>
+                <p class="auth-hint">Guest mode keeps your tasks on this device only.</p>
+            </form>
+
+            <!-- Register Form -->
+            <form id="registerForm" class="auth-form hidden" novalidate>
+                <label class="field">Full Name
+                    <input type="text" id="regName" autocomplete="name" placeholder="Douphne Vor" required>
+                </label>
+                <label class="field">Username
+                    <input type="text" id="regUsername" autocomplete="username" placeholder="3+ characters, letters/numbers" required>
+                </label>
+                <label class="field">Email
+                    <input type="email" id="regEmail" autocomplete="email" placeholder="you@example.com" required>
+                </label>
+                <label class="field">Password
+                    <span class="pw-wrap">
+                        <input type="password" id="regPassword" autocomplete="new-password" placeholder="At least 6 characters" required>
+                        <button type="button" class="pw-toggle" data-target="regPassword" title="Show/Hide password">👁</button>
+                    </span>
+                </label>
+                <div class="pw-strength" id="pwStrength">
+                    <div class="pw-bar"><span id="pwBarFill"></span></div>
+                    <small id="pwStrengthLabel">Enter a password</small>
+                </div>
+                <label class="field">Confirm Password
+                    <input type="password" id="regConfirm" autocomplete="new-password" placeholder="Repeat your password" required>
+                </label>
+                <p class="auth-error hidden" id="registerError"></p>
+                <button type="submit" class="btn-primary btn-block">Create Account</button>
+                <p class="auth-hint">Your account is stored locally in this browser (demo app).</p>
+            </form>
         </div>
     </div>
 
+    <!-- ==================== APP VIEW ==================== -->
+    <div id="appView" class="app-view hidden">
+        <header class="app-header">
+            <div class="brand"><span class="brand-mark">✔</span> Vor-To-Do</div>
+            <div class="user-area">
+                <span id="greeting" class="greeting"></span>
+                <div class="avatar" id="userAvatar">V</div>
+                <span id="userName" class="user-name"></span>
+                <button id="themeToggle" class="icon-btn" title="Toggle dark mode">🌙</button>
+                <button id="logoutBtn" class="icon-btn icon-btn-danger" title="Log out">Log out</button>
+            </div>
+        </header>
+
+        <div class="container">
+            <div class="dashboard-head">
+                <h2>Task Manager</h2>
+                <span id="motivation" class="motivation"></span>
+            </div>
+
+            <!-- Dashboard Stats -->
+            <div class="dashboard">
+                <div class="stat-card stat-total">
+                    <h3>Total</h3>
+                    <p id="totalTasks">0</p>
+                </div>
+                <div class="stat-card stat-done">
+                    <h3>Done</h3>
+                    <p id="completedTasks">0</p>
+                </div>
+                <div class="stat-card stat-pending">
+                    <h3>Pending</h3>
+                    <p id="pendingTasks">0</p>
+                </div>
+                <div class="stat-card stat-overdue">
+                    <h3>Overdue</h3>
+                    <p id="overdueTasks">0</p>
+                </div>
+            </div>
+
+            <!-- Progress Bar -->
+            <div class="progress-wrap" title="Completion progress">
+                <div class="progress-bar"><div id="progressFill" class="progress-fill" style="width:0%"></div></div>
+                <small id="progressLabel">0% complete</small>
+            </div>
+
+            <!-- Add Task Form -->
+            <div class="add-form">
+                <input type="text" id="taskInput" placeholder="What needs to be done?" autocomplete="off">
+                <select id="taskPriority" title="Priority">
+                    <option value="low">🟢 Low priority</option>
+                    <option value="medium" selected>🟡 Medium priority</option>
+                    <option value="high">🔴 High priority</option>
+                </select>
+                <select id="taskCategory" title="Category">
+                    <option value="personal">🏠 Personal</option>
+                    <option value="work">💼 Work</option>
+                    <option value="shopping">🛒 Shopping</option>
+                    <option value="health">💪 Health</option>
+                    <option value="other">📌 Other</option>
+                </select>
+                <input type="date" id="taskDate" title="Due date">
+                <input type="time" id="taskTime" title="Due time">
+                <button id="addBtn">Add Task</button>
+            </div>
+
+            <!-- Toolbar: search / filter / sort -->
+            <div class="toolbar">
+                <input type="search" id="searchInput" placeholder="Search tasks…  (press / to focus)" autocomplete="off">
+                <div class="filter-tabs" role="tablist">
+                    <button type="button" class="filter-tab active" data-filter="all">All</button>
+                    <button type="button" class="filter-tab" data-filter="active">Active</button>
+                    <button type="button" class="filter-tab" data-filter="done">Done</button>
+                </div>
+                <select id="categoryFilter" title="Filter by category">
+                    <option value="all">All categories</option>
+                    <option value="personal">🏠 Personal</option>
+                    <option value="work">💼 Work</option>
+                    <option value="shopping">🛒 Shopping</option>
+                    <option value="health">💪 Health</option>
+                    <option value="other">📌 Other</option>
+                </select>
+                <select id="sortSelect" title="Sort tasks">
+                    <option value="default">Sort: Manual order</option>
+                    <option value="due">Sort: Due date</option>
+                    <option value="priority">Sort: Priority</option>
+                    <option value="alpha">Sort: A → Z</option>
+                </select>
+                <button type="button" id="exportBtn" class="btn-tool" title="Download tasks as JSON">⬇ Export</button>
+                <button type="button" id="clearDoneBtn" class="btn-tool btn-tool-danger" title="Remove all completed tasks">Clear Done</button>
+            </div>
+
+            <ul id="taskList"></ul>
+
+            <div id="emptyState" class="empty-state hidden">
+                <p class="empty-icon">🗒️</p>
+                <p id="emptyText">No tasks here yet.</p>
+                <p class="empty-sub">Add one above — or double-click any task to edit it.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast with Undo -->
+    <div id="toast" class="toast">
+        <span id="toastMsg"></span>
+        <button id="toastUndo" class="toast-undo hidden">Undo</button>
+    </div>
+
     <footer class="site-footer">
-        <p>&copy; 2026 Task Manager App. All rights reserved.</p>
+        <p>&copy; 2026 Vor-To-Do. All rights reserved.</p>
         <p>Designed and developed by <span class="dev-name">vor</span></p>
     </footer>
 
